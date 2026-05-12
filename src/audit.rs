@@ -25,12 +25,13 @@ pub fn log_entry(entry: &AuditEntry) -> io::Result<()> {
 
     let log_path = log_dir.join("audit.jsonl");
     let line = serde_json::to_string(entry)? + "\n";
-    fs::OpenOptions::new()
+
+    use std::io::Write;
+    let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&log_path)?
-        .metadata()?;
-    std::fs::write(&log_path, line)?;
+        .open(&log_path)?;
+    file.write_all(line.as_bytes())?;
 
     Ok(())
 }

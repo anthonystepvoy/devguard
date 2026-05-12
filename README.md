@@ -64,23 +64,27 @@ devguard audit-log
 devguard audit-log --lines 50
 ```
 
-## What gets blocked
+## What gets hidden
+
+Scripts that access files through `$HOME` or `~` see an empty temp directory:
 
 ```
-✓ No access to ~/.ssh
-✓ No access to ~/.aws
-✓ No access to ~/.config/gh
-✓ No access to ~/.docker
-✓ No access to ~/.kube
-✓ No access to ~/.git-credentials
-✓ No access to ~/.netrc
-✓ No access to ~/.azure, ~/.config/gcloud
-✓ No SSH agent socket
-✓ Secret env vars stripped (GITHUB_TOKEN, AWS_*, etc.)
-✓ Shell history inaccessible
+✓ ~/.ssh          → hidden via HOME redirect
+✓ ~/.aws          → hidden via HOME redirect
+✓ ~/.config/gh    → hidden via HOME redirect
+✓ ~/.docker       → hidden via HOME redirect
+✓ ~/.kube         → hidden via HOME redirect
+✓ ~/.git-credentials → hidden via HOME redirect
+✓ ~/.netrc        → hidden via HOME redirect
+✓ ~/.azure, ~/.config/gcloud → hidden via HOME redirect
+✓ SSH agent socket → disconnected
+✓ Secret env vars → stripped (GITHUB_TOKEN, AWS_*, etc.)
+
+npm/pnpm only:
+✓ ~/.npmrc        → fully blocked (not present in sandbox)
 ```
 
-For npm/pnpm: `.npmrc` is also blocked during script execution.
+> **Current limitation:** Scripts using absolute paths (e.g. `/home/user/.ssh` or `C:\Users\Admin\.ssh`) can still access these files. The current defense is HOME redirection, not OS-level filesystem isolation. Full sandbox enforcement via Landlock, AppContainer, and Endpoint Security is planned for v0.2.
 
 ## Install
 

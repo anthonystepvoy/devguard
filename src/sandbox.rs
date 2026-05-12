@@ -99,7 +99,7 @@ pub fn run_install(
 
             println!();
             println!(
-                "{} Scripts ran with NO access to: .npmrc, .ssh, .aws, .docker, .kube, .config/gh, .env, shell history",
+                "{} Scripts ran with secrets hidden (HOME redirect)",
                 "🔒".bold()
             );
 
@@ -143,9 +143,7 @@ pub fn run_install(
             "→".bold(),
             sandbox_home.display().to_string().dimmed()
         );
-        print_sandbox_wall();
-        println!("  ⚠ .npmrc pass-through enabled (needed for private registries)");
-        println!("  ⚠ Postinstall scripts may read .npmrc (all other secrets blocked)");
+        print_sandbox_wall_union();
 
         println!();
         println!("{} Running {} install...", "[*]".cyan().bold(), manager);
@@ -224,16 +222,33 @@ fn print_header(manager: &str, allow_network: bool) {
 
 fn print_sandbox_wall() {
     println!();
-    println!("{} Sandbox enforced:", "---".bold());
-    println!("  ✓ HOME = temporary directory (no real secrets)");
-    println!("  ✓ No access to ~/.ssh");
-    println!("  ✓ No access to ~/.aws");
-    println!("  ✓ No access to ~/.config/gh");
-    println!("  ✓ No access to ~/.docker");
-    println!("  ✓ No access to ~/.kube");
-    println!("  ✓ No SSH agent socket");
+    println!("{} Sandbox defense:", "---".bold());
+    println!("  ✓ HOME → temp directory (shell path resolution redirected)");
+    println!("  ✓ ~/.npmrc fully blocked (not present in sandbox HOME)");
+    println!("  ✓ ~/.ssh hidden via HOME redirect");
+    println!("  ✓ ~/.aws hidden via HOME redirect");
+    println!("  ✓ ~/.config/gh hidden via HOME redirect");
+    println!("  ✓ ~/.docker hidden via HOME redirect");
+    println!("  ✓ ~/.kube hidden via HOME redirect");
+    println!("  ✓ SSH agent disconnected");
     println!("  ✓ Secret env vars stripped");
-    println!("  ✓ Shell history inaccessible");
+    println!("  ⚠ Absolute-path bypass possible for non-.npmrc paths (OS enforcement in v0.2)");
+}
+
+fn print_sandbox_wall_union() {
+    println!();
+    println!("{} Sandbox defense:", "---".bold());
+    println!("  ✓ HOME → temp directory (shell path resolution redirected)");
+    println!("  ✓ ~/.ssh hidden via HOME redirect");
+    println!("  ✓ ~/.aws hidden via HOME redirect");
+    println!("  ✓ ~/.config/gh hidden via HOME redirect");
+    println!("  ✓ ~/.docker hidden via HOME redirect");
+    println!("  ✓ ~/.kube hidden via HOME redirect");
+    println!("  ✓ SSH agent disconnected");
+    println!("  ✓ Secret env vars stripped");
+    println!("  ⚠ .npmrc pass-through enabled (needed for private registries)");
+    println!("  ⚠ Postinstall scripts may read .npmrc (all other secrets hidden)");
+    println!("  ⚠ Absolute-path bypass possible (OS enforcement in v0.2)");
 }
 
 fn resolve_project_dir(cwd: Option<&str>) -> io::Result<PathBuf> {
@@ -276,6 +291,8 @@ fn find_package_manager(manager: &str) -> Result<PathBuf, Box<dyn std::error::Er
 }
 
 fn create_sandbox_home() -> io::Result<PathBuf> {
+    clean_old_sandboxes();
+
     #[allow(deprecated)]
     let sandbox = tempfile::tempdir()?.into_path();
 
@@ -285,6 +302,26 @@ fn create_sandbox_home() -> io::Result<PathBuf> {
     }
 
     Ok(sandbox)
+}
+
+fn clean_old_sandboxes() {
+    let temp = std::env::temp_dir();
+    if let Ok(entries) = fs::read_dir(&temp) {
+        let now = std::time::SystemTime::now();
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with(".tmp") {
+                if let Ok(meta) = entry.metadata() {
+                    if let Ok(age) = now.duration_since(meta.modified().unwrap_or(now)) {
+                        if age.as_secs() > 3600 {
+                            let _ = fs::remove_dir_all(entry.path());
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn create_union_home(real_home: &PathBuf) -> io::Result<PathBuf> {
@@ -304,27 +341,36 @@ fn create_union_home(real_home: &PathBuf) -> io::Result<PathBuf> {
 fn build_sandbox_env(sandbox_home: &PathBuf) -> HashMap<String, String> {
     let mut env = env::sanitize_for_sandbox();
 
-    env.insert("HOME".to_string(), sandbox_home.display().to_string());
-    env.insert(
-        "USERPROFILE".to_string(),
-        sandbox_home.display().to_string(),
-    );
-    env.insert(
-        "APPDATA".to_string(),
-        sandbox_home
-            .join("AppData")
-            .join("Roaming")
-            .display()
-            .to_string(),
-    );
-    env.insert(
-        "LOCALAPPDATA".to_string(),
-        sandbox_home
-            .join("AppData")
-            .join("Local")
-            .display()
-            .to_string(),
-    );
+    let home_str = sandbox_home.display().to_string();
+    env.insert("HOME".to_string(), home_str.clone());
+    env.insert("USERPROFILE".to_string(), home_str.clone());
+
+    if cfg!(target_os = "windows") {
+        if let Some(drive) = home_str.chars().next() {
+            env.insert("HOMEDRIVE".to_string(), format!("{}:", drive));
+        }
+        let home_relative = home_str
+            .strip_prefix(&format!("{}:", home_str.chars().next().unwrap_or('C')))
+            .unwrap_or(&home_str)
+            .to_string();
+        env.insert("HOMEPATH".to_string(), home_relative);
+        env.insert(
+            "APPDATA".to_string(),
+            sandbox_home
+                .join("AppData")
+                .join("Roaming")
+                .display()
+                .to_string(),
+        );
+        env.insert(
+            "LOCALAPPDATA".to_string(),
+            sandbox_home
+                .join("AppData")
+                .join("Local")
+                .display()
+                .to_string(),
+        );
+    }
 
     env.remove("SSH_AUTH_SOCK");
     env.remove("SSH_AGENT_PID");

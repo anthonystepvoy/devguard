@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { execSync } = require('child_process');
+const { spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -14,11 +14,10 @@ if (!fs.existsSync(binPath)) {
 
 const args = process.argv.slice(2);
 
-try {
-  execSync(`"${binPath}" ${args.map(a => `"${a}"`).join(' ')}`, {
-    stdio: 'inherit',
-    env: process.env,
-  });
-} catch (err) {
-  process.exit(err.status || 1);
-}
+const result = spawnSync(binPath, args, {
+  stdio: 'inherit',
+  env: process.env,
+  windowsHide: true,
+});
+
+process.exit(result.status ?? 1);

@@ -133,12 +133,12 @@ fn scan_shell_profiles(scan_dir: &PathBuf, result: &mut ScanResult) {
 }
 
 fn scan_content_for_tokens(path: &PathBuf, contents: &str, result: &mut ScanResult) {
-    let patterns: Vec<(&str, &str)> = vec![
-        (r#"TOKEN\w*\s*=\s*.+"#, "TOKEN"),
-        (r#"SECRET\w*\s*=\s*.+"#, "SECRET"),
-        (r#"PASSWORD\w*\s*=\s*.+"#, "PASSWORD"),
-        (r#"API_KEY\w*\s*=\s*.+"#, "API_KEY"),
-        (r#"_authToken\s*=\s*\S+"#, "npm _authToken"),
+    let patterns: &[(&str, &str)] = &[
+        (r#"(?i)TOKEN\s*=\s*['"][^'"]{8,}['"]"#, "TOKEN in quotes"),
+        (r#"(?i)SECRET\s*=\s*['"][^'"]{8,}['"]"#, "SECRET in quotes"),
+        (r#"(?i)PASSWORD\s*=\s*['"][^'"]{8,}['"]"#, "PASSWORD in quotes"),
+        (r#"(?i)API_KEY\s*=\s*['"][^'"]{8,}['"]"#, "API_KEY in quotes"),
+        (r#"_authToken\s*=\s*\S{8,}"#, "npm _authToken"),
         (r"//registry\.npmjs\.org/:_authToken\s*=\s*(\S+)", "npm registry token"),
         (r"ghp_[a-zA-Z0-9]{36}", "GitHub personal access token"),
         (r"github_pat_[a-zA-Z0-9_]{22,}", "GitHub fine-grained token"),
@@ -147,28 +147,31 @@ fn scan_content_for_tokens(path: &PathBuf, contents: &str, result: &mut ScanResu
         (r"ghs_[a-zA-Z0-9]{36}", "GitHub server token"),
         (r"ghr_[a-zA-Z0-9]{36}", "GitHub refresh token"),
         (r"AKIA[0-9A-Z]{16}", "AWS Access Key ID"),
-        (r"sk-[a-zA-Z0-9]{20,}", "OpenAI API key"),
         (r"sk-ant-[a-zA-Z0-9]{20,}", "Anthropic API key"),
+        (r"sk-(?!ant-)[a-zA-Z0-9]{20,}", "OpenAI API key"),
         (r"AIza[0-9A-Za-z\-_]{35}", "Google API key"),
     ];
 
-    for (pattern, token_type) in &patterns {
-        if let Ok(re) = Regex::new(pattern) {
-            for (line_number, line) in contents.lines().enumerate() {
-                if re.is_match(line) {
-                    let snippet = if line.len() > 120 {
-                        format!("{}...", &line[..117])
-                    } else {
-                        line.to_string()
-                    };
+    let compiled: Vec<(Regex, &str)> = patterns
+        .iter()
+        .filter_map(|(p, t)| Regex::new(p).ok().map(|re| (re, *t)))
+        .collect();
 
-                    result.readable_tokens.push(TokenMatch {
-                        file: path.display().to_string(),
-                        line_number: line_number + 1,
-                        line_snippet: snippet,
-                        token_type: token_type.to_string(),
-                    });
-                }
+    for (re, token_type) in &compiled {
+        for (line_number, line) in contents.lines().enumerate() {
+            if re.is_match(line) {
+                let snippet = if line.len() > 120 {
+                    format!("{}...", &line[..117])
+                } else {
+                    line.to_string()
+                };
+
+                result.readable_tokens.push(TokenMatch {
+                    file: path.display().to_string(),
+                    line_number: line_number + 1,
+                    line_snippet: snippet,
+                    token_type: token_type.to_string(),
+                });
             }
         }
     }
