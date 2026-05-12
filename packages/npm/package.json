@@ -1,0 +1,33 @@
+{
+  "name": "devguard",
+  "version": "0.1.0",
+  "description": "Developer token firewall — run package installs without exposing secrets",
+  "license": "MIT",
+  "repository": "https://github.com/devguard/devguard",
+  "bin": {
+    "devguard": "bin/devguard.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "bin/",
+    "install.js",
+    "README.md"
+  ],
+  "keywords": [
+    "security",
+    "npm",
+    "supply-chain",
+    "sandbox",
+    "token",
+    "secrets",
+    "firewall",
+    "devsec"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": ["darwin", "linux", "win32"],
+  "cpu": ["x64", "arm64"]
+}
