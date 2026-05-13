@@ -1,5 +1,4 @@
-use home::home_dir;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretPath {
@@ -14,7 +13,6 @@ pub enum Severity {
     Critical,
     High,
     Medium,
-    Low,
 }
 
 impl std::fmt::Display for Severity {
@@ -23,13 +21,11 @@ impl std::fmt::Display for Severity {
             Severity::Critical => write!(f, "CRITICAL"),
             Severity::High => write!(f, "HIGH"),
             Severity::Medium => write!(f, "MEDIUM"),
-            Severity::Low => write!(f, "LOW"),
         }
     }
 }
 
-pub fn known_secret_paths() -> Vec<SecretPath> {
-    let home = home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+pub fn known_secret_paths_in(home: &Path) -> Vec<SecretPath> {
     vec![
         SecretPath {
             path: home.join(".npmrc"),
@@ -169,16 +165,32 @@ pub fn sandbox_home_paths() -> Vec<(PathBuf, &'static str)> {
         (PathBuf::from(".electron-gyp"), "electron-gyp cache"),
         (PathBuf::from(".ccache"), "ccache"),
         (PathBuf::from(".sccache"), "sccache"),
-        (PathBuf::from(".cargo").join("registry"), "cargo registry cache"),
+        (
+            PathBuf::from(".cargo").join("registry"),
+            "cargo registry cache",
+        ),
         (PathBuf::from(".cargo").join("git"), "cargo git checkouts"),
         (PathBuf::from(".pnpm-store"), "pnpm global store"),
         (PathBuf::from(".yarn"), "yarn cache"),
-        (PathBuf::from(".bun").join("install").join("cache"), "bun cache"),
+        (
+            PathBuf::from(".bun").join("install").join("cache"),
+            "bun cache",
+        ),
     ]
 }
 
 pub fn secret_env_var_patterns() -> Vec<&'static str> {
     vec![
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "API_KEY",
+        "APIKEY",
+        "PRIVATE_KEY",
+        "ACCESS_KEY",
+        "CREDENTIAL",
+        "AUTH",
         "NPM_TOKEN",
         "NODE_AUTH_TOKEN",
         "GITHUB_TOKEN",
@@ -187,6 +199,9 @@ pub fn secret_env_var_patterns() -> Vec<&'static str> {
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_SESSION_TOKEN",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
         "AZURE",
         "GCLOUD",
         "GOOGLE_APPLICATION_CREDENTIALS",
@@ -223,7 +238,12 @@ pub fn auth_pass_through_paths() -> Vec<&'static str> {
 
 #[allow(dead_code)]
 pub fn project_git_config() -> Vec<&'static str> {
-    vec![
-        ".gitconfig",
-    ]
+    vec![".gitconfig"]
+}
+
+pub fn is_secret_env_var(key: &str) -> bool {
+    let upper = key.to_uppercase();
+    secret_env_var_patterns()
+        .iter()
+        .any(|pattern| upper.contains(pattern))
 }

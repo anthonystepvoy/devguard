@@ -1,10 +1,10 @@
 [package]
-name = "devguard"
+name = "devguard-token-firewall"
 version = "0.1.0"
 edition = "2024"
-description = "Developer token firewall — run package installs without exposing secrets"
+description = "Experimental HOME/env isolation for package-manager install scripts"
 license = "MIT"
-repository = "https://github.com/devguard/devguard"
+repository = "https://github.com/anthonystepvoy/devguard"
 
 [[bin]]
 name = "devguard"

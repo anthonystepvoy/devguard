@@ -1,14 +1,19 @@
 {
-  "name": "devguard",
+  "name": "@anthonystepvoy/devguard",
   "version": "0.1.0",
-  "description": "Developer token firewall — run package installs without exposing secrets",
+  "description": "Experimental HOME/env isolation for package-manager install scripts",
   "license": "MIT",
-  "repository": "https://github.com/devguard/devguard",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anthonystepvoy/devguard.git",
+    "directory": "packages/npm"
+  },
   "bin": {
     "devguard": "bin/devguard.js"
   },
   "scripts": {
-    "postinstall": "node install.js"
+    "postinstall": "node install.js",
+    "test": "node --test install.test.js"
   },
   "files": [
     "bin/",
@@ -28,6 +33,13 @@
   "engines": {
     "node": ">=18"
   },
-  "os": ["darwin", "linux", "win32"],
-  "cpu": ["x64", "arm64"]
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
 }

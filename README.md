@@ -1,154 +1,128 @@
 # devguard
 
-**Developer token firewall — run package installs without exposing your secrets.**
+Experimental HOME/env isolation for package-manager install scripts.
 
-```
-npm install -g devguard    # or pnpm, yarn, bun
-devguard install npm       # no access to ~/.ssh, ~/.aws, ~/.npmrc, ~/.config/gh, .env
-```
-
-## The problem
-
-Your machine holds valuable tokens in files any `npm install` script can read:
-
-| Token location | What it grants |
-|---|---|
-| `~/.npmrc` | Publish packages under your name |
-| `~/.ssh` | Push to your repos |
-| `~/.aws/credentials` | Provision infrastructure |
-| `~/.config/gh/hosts.yml` | Full GitHub account access |
-| `.env` | Database URLs, API keys |
-| Shell history | Leaked credentials in past commands |
-
-Recent supply-chain attacks (Mini Shai-Hulud, CanisterWorm, Intercom compromise — all 2026) abused postinstall scripts to read exactly these files. Scanners help, but zero-day malware slips through. The only reliable defense is **denying access at runtime**.
-
-## How it works
-
-devguard wraps your package manager in a sandboxed environment during install:
-
-```
+```bash
+npm install -g @anthonystepvoy/devguard
 devguard install npm
 ```
 
-### npm / pnpm — two-phase isolation
+devguard reduces the secrets exposed to dependency lifecycle scripts by running scripts with a temporary `HOME`, redirected Windows home variables, no SSH agent socket, and a conservative environment allowlist.
 
+It is not an OS sandbox yet. Scripts can still read files through absolute paths, can read files in the project directory, and can use the network. Treat this as a defense-in-depth install wrapper, not a complete token firewall.
+
+## The Problem
+
+Developer machines often keep high-value bearer tokens in files that package install scripts can read:
+
+| Token location | What it can grant |
+|---|---|
+| `~/.npmrc` | npm registry auth |
+| `~/.ssh` | repository and server access |
+| `~/.aws/credentials` | cloud infrastructure access |
+| `~/.config/gh/hosts.yml` | GitHub CLI auth |
+| `~/.docker/config.json` | registry auth |
+| `~/.kube/config` | cluster access |
+| shell history | previously pasted credentials |
+
+Scanners and package reputation tools help, but a novel malicious lifecycle script still runs as your user. devguard's current approach is to remove common home-directory and environment-secret access paths during the script phase.
+
+## How It Works
+
+### npm / pnpm
+
+```text
+Phase 1: npm install --ignore-scripts   # real HOME, real auth, scripts disabled
+Phase 2: npm rebuild                    # temporary HOME, scripts enabled
 ```
-Phase 1: npm install --ignore-scripts   ← real HOME, real .npmrc (download only)
-Phase 2: npm rebuild                    ← fake HOME, no secrets (scripts run here)
-```
 
-Scripts execute with access to nothing. Private registries work because auth is only used during download.
+Private registries can still work during download. Lifecycle scripts then run with `HOME`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, and `LOCALAPPDATA` pointed at a temporary directory.
 
-### yarn / bun — union HOME
+### yarn / bun
 
-A temporary HOME is created with only the auth files needed for registry access. Everything else is blocked.
+yarn and bun do not have an equivalent rebuild flow here, so devguard uses a single-pass temporary HOME and copies only package-manager auth/config files into it. This is weaker because auth files can be visible to lifecycle scripts.
 
 ## Commands
 
 ```bash
-# Scan your machine for exposed tokens
 devguard scan
 devguard scan --json
 devguard scan --dir ./project
 
-# Run a sandboxed package install
 devguard install npm
 devguard install pnpm
 devguard install yarn
 devguard install bun
-devguard install npm -- -D typescript          # extra args
 devguard install npm --cwd ./my-project
+devguard install npm -- -D typescript
 
-# View audit log
 devguard audit-log
 devguard audit-log --lines 50
 ```
 
-## What gets hidden
+## What Is Protected Today
 
-Scripts that access files through `$HOME` or `~` see an empty temp directory:
+Scripts that use `$HOME`, `~`, `USERPROFILE`, `HOMEDRIVE`/`HOMEPATH`, `APPDATA`, or `LOCALAPPDATA` see a temporary directory instead of your real home.
 
-```
-✓ ~/.ssh          → hidden via HOME redirect
-✓ ~/.aws          → hidden via HOME redirect
-✓ ~/.config/gh    → hidden via HOME redirect
-✓ ~/.docker       → hidden via HOME redirect
-✓ ~/.kube         → hidden via HOME redirect
-✓ ~/.git-credentials → hidden via HOME redirect
-✓ ~/.netrc        → hidden via HOME redirect
-✓ ~/.azure, ~/.config/gcloud → hidden via HOME redirect
-✓ SSH agent socket → disconnected
-✓ Secret env vars → stripped (GITHUB_TOKEN, AWS_*, etc.)
+devguard also removes SSH agent variables and passes only a small environment allowlist, which keeps common variables such as `GITHUB_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `NPM_TOKEN`, and generic `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_API_KEY`, `*_PRIVATE_KEY`, and `*_CREDENTIAL` names out of the script environment.
 
-npm/pnpm only:
-✓ ~/.npmrc        → fully blocked (not present in sandbox)
-```
+## Current Limitations
 
-> **Current limitation:** Scripts using absolute paths (e.g. `/home/user/.ssh` or `C:\Users\Admin\.ssh`) can still access these files. The current defense is HOME redirection, not OS-level filesystem isolation. Full sandbox enforcement via Landlock, AppContainer, and Endpoint Security is planned for v0.2.
+- This is HOME/env redirection, not OS-level filesystem isolation.
+- Absolute paths such as `C:\Users\name\.npmrc` or `/home/name/.ssh/id_rsa` can bypass the protection.
+- Files in the project directory, including project `.env` files, remain visible to dependency scripts.
+- Network policy is advisory only; devguard does not block exfiltration yet.
+- yarn/bun isolation is weaker than npm/pnpm because auth files may be present in the temporary HOME.
+- macOS and Linux need real-world validation.
+
+OS-level enforcement with AppContainer, Landlock, and macOS security APIs is the main v0.2 direction.
 
 ## Install
 
-### npm / pnpm / yarn / bun
+### npm
 
 ```bash
-npm install -g devguard
-pnpm add -g devguard
-yarn global add devguard
-bun add -g devguard
+npm install -g @anthonystepvoy/devguard
 ```
 
-### Build from source
+The npm package downloads a platform binary from GitHub releases and verifies a matching `.sha256` file. Release assets must use these names:
+
+```text
+devguard-x86_64-pc-windows-msvc.exe
+devguard-aarch64-pc-windows-msvc.exe
+devguard-x86_64-apple-darwin
+devguard-aarch64-apple-darwin
+devguard-x86_64-unknown-linux-gnu
+devguard-aarch64-unknown-linux-gnu
+```
+
+Each asset needs a sidecar checksum file named `<asset>.sha256`.
+
+### Build From Source
 
 ```bash
-git clone https://github.com/devguard/devguard
+git clone https://github.com/anthonystepvoy/devguard
 cd devguard
 cargo build --release
-# binary at target/release/devguard
 ```
+
+The binary is `target/release/devguard` or `target/release/devguard.exe`.
 
 ## Roadmap
 
-- [x] Token scanner (22 file paths, 16 regex patterns)
-- [x] Sandboxed install with fake HOME
-- [x] Two-phase isolation (npm/pnpm)
-- [x] Union HOME fallback (yarn/bun)
-- [x] Secret env var stripping
-- [x] Audit logging (JSONL)
-- [x] npm distribution wrapper
-- [ ] OS-level network blocking (WFP, nftables/eBPF, Network Extension)
-- [ ] OS-level filesystem blocking (AppContainer, Landlock, ESF)
-- [ ] macOS support validation
-- [ ] Per-project trust policies
-- [ ] Token broker daemon (hardware-backed secret storage)
-- [ ] Transparent background protection
-
-## FAQ
-
-**Does this slow down installs?**  
-Minimal. For npm/pnpm, the two-phase approach adds one `npm rebuild` pass after the normal download — typically under 1 second. For yarn/bun, it's a single pass.
-
-**Does it break native packages like esbuild or sharp?**  
-No. Build tools (node-gyp, ccache, etc.) work through standard cache directories that are created in the sandbox HOME.
-
-**What about private registries?**  
-Fully supported. Auth files pass through during the download phase. Scripts run without access to them.
-
-**Which OS?**  
-Windows — built and tested. The code is cross-platform Rust; Linux and macOS should compile but haven't been verified. If you can test on those platforms, contributions are very welcome (see [Contributing](#contributing)).
+- [x] Token scanner with redacted output
+- [x] npm/pnpm two-phase HOME/env isolation
+- [x] yarn/bun temporary HOME fallback
+- [x] Conservative environment allowlist
+- [x] JSONL audit log
+- [x] npm distribution wrapper with checksum verification
+- [ ] OS-level filesystem isolation
+- [ ] OS-level network blocking
+- [ ] Per-project policies
+- [ ] Project `.env` mediation
+- [ ] Token broker daemon
+- [ ] macOS and Linux validation
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions are welcome. Big areas where help is especially needed:
-
-- **macOS testing and validation** — I don't have access to a Mac. The Rust code should be portable but needs real-world testing and possible sandbox-exec/Endpoint Security integration.
-- **Linux testing and validation** — should work out of the box but hasn't been tested. Linux also opens the door to namespace/seccomp/Landlock enforcement.
-- **OS-level network blocking** — Windows Filtering Platform, Linux nftables/eBPF, macOS Network Extension.
-- **More package ecosystems** — pip, cargo, gem, nuget.
-- **Better Windows sandboxing** — AppContainer integration for true filesystem isolation.
-- **Tests** — there are none yet.
-
-Open an issue or PR if you want to help. All skill levels welcome.

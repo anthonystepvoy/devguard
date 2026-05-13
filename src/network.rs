@@ -15,7 +15,7 @@ pub fn allowed_registry_hosts() -> Vec<&'static str> {
 pub fn blocked_hosts() -> Vec<&'static str> {
     vec![
         "api.github.com/repos/.*/private", // making repos public
-        "api.github.com/user/keys",         // adding SSH keys
+        "api.github.com/user/keys",        // adding SSH keys
         "api.github.com/repos/.*/branches/.*/protection", // branch protection
         "webhook.site",
         "requestbin.com",
@@ -52,9 +52,9 @@ pub fn print_network_policy(allow_network: bool) {
         );
     } else {
         println!(
-            "{} Network: {} (registry + CDN only)",
+            "{} Network: {} (policy listed, not enforced)",
             "→".bold(),
-            "SANDBOXED".green().bold()
+            "ADVISORY".yellow().bold()
         );
     }
 }

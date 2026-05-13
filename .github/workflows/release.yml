@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: devguard-x86_64-pc-windows-msvc.exe
+            binary: target/x86_64-pc-windows-msvc/release/devguard.exe
+            shell: pwsh
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            asset: devguard-aarch64-pc-windows-msvc.exe
+            binary: target/aarch64-pc-windows-msvc/release/devguard.exe
+            shell: pwsh
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset: devguard-x86_64-apple-darwin
+            binary: target/x86_64-apple-darwin/release/devguard
+            shell: bash
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset: devguard-aarch64-apple-darwin
+            binary: target/aarch64-apple-darwin/release/devguard
+            shell: bash
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: devguard-x86_64-unknown-linux-gnu
+            binary: target/x86_64-unknown-linux-gnu/release/devguard
+            shell: bash
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            asset: devguard-aarch64-unknown-linux-gnu
+            binary: target/aarch64-unknown-linux-gnu/release/devguard
+            shell: bash
+
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install Linux ARM64 linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Configure Linux ARM64 linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - name: Test
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Prepare asset
+        if: runner.os != 'Windows'
+        run: |
+          cp "${{ matrix.binary }}" "${{ matrix.asset }}"
+          chmod 755 "${{ matrix.asset }}"
+          shasum -a 256 "${{ matrix.asset }}" | awk '{print $1 "  " $2}' > "${{ matrix.asset }}.sha256"
+
+      - name: Prepare asset
+        if: runner.os == 'Windows'
+        run: |
+          Copy-Item -LiteralPath "${{ matrix.binary }}" -Destination "${{ matrix.asset }}" -Force
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "${{ matrix.asset }}").Hash.ToLowerInvariant()
+          "$hash  ${{ matrix.asset }}" | Set-Content -NoNewline -Path "${{ matrix.asset }}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            ${{ matrix.asset }}
+            ${{ matrix.asset }}.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Experimental HOME/env isolation for package-manager install scripts."

@@ -5,9 +5,14 @@ use colored::Colorize;
 use std::collections::HashMap;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
+
+struct SandboxEnv {
+    vars: HashMap<String, String>,
+    withheld_count: usize,
+}
 
 pub fn run_install(
     manager: &str,
@@ -52,7 +57,14 @@ pub fn run_install(
         let phase1_code = spawn_download_phase(&pm_path, manager, args, &project_dir)?;
         if phase1_code != 0 {
             let duration = start.elapsed();
-            log_audit(manager, &project_dir, phase1_code, duration.as_millis() as u64, "download-failed", None, None);
+            log_audit(
+                manager,
+                &project_dir,
+                phase1_code,
+                duration.as_millis() as u64,
+                "download-failed",
+                None,
+            );
             println!();
             println!(
                 "{} Download failed (exit {})",
@@ -72,7 +84,7 @@ pub fn run_install(
         let sandbox_home = create_sandbox_home()?;
         let sandbox_env = build_sandbox_env(&sandbox_home);
 
-        env::print_env_summary(std::env::vars().count(), sandbox_env.len());
+        env::print_env_summary(sandbox_env.vars.len(), sandbox_env.withheld_count);
         network::print_network_policy(allow_network);
 
         println!(
@@ -85,9 +97,9 @@ pub fn run_install(
         println!();
         println!("{} Running {} rebuild...", "[*]".cyan().bold(), manager);
 
-        let phase2_code = spawn_rebuild_phase(&pm_path, manager, &sandbox_env, &project_dir)?;
+        let phase2_code = spawn_rebuild_phase(&pm_path, manager, &sandbox_env.vars, &project_dir)?;
         let duration = start.elapsed();
-        let secrets_denied = std::env::vars().count() - sandbox_env.len() + 1;
+        let env_vars_withheld = sandbox_env.withheld_count;
 
         if phase2_code == 0 {
             println!();
@@ -98,10 +110,7 @@ pub fn run_install(
             );
 
             println!();
-            println!(
-                "{} Scripts ran with secrets hidden (HOME redirect)",
-                "🔒".bold()
-            );
+            println!("{} Scripts ran with HOME/env isolation", "🔒".bold());
 
             log_audit(
                 manager,
@@ -109,8 +118,7 @@ pub fn run_install(
                 0,
                 duration.as_millis() as u64,
                 "clean",
-                Some((std::env::vars().count() - sandbox_env.len() + 1) as usize),
-                None,
+                Some(env_vars_withheld),
             );
         } else {
             println!();
@@ -126,8 +134,7 @@ pub fn run_install(
                 phase2_code,
                 duration.as_millis() as u64,
                 &format!("rebuild-exit-{}", phase2_code),
-                Some(secrets_denied as usize),
-                None,
+                Some(env_vars_withheld),
             );
         }
     } else {
@@ -135,7 +142,7 @@ pub fn run_install(
         let sandbox_home = create_union_home(&real_home)?;
         let sandbox_env = build_sandbox_env(&sandbox_home);
 
-        env::print_env_summary(std::env::vars().count(), sandbox_env.len());
+        env::print_env_summary(sandbox_env.vars.len(), sandbox_env.withheld_count);
         network::print_network_policy(allow_network);
 
         println!(
@@ -148,7 +155,8 @@ pub fn run_install(
         println!();
         println!("{} Running {} install...", "[*]".cyan().bold(), manager);
 
-        let exit_code = spawn_install_phase(&pm_path, manager, args, &sandbox_env, &project_dir)?;
+        let exit_code =
+            spawn_install_phase(&pm_path, manager, args, &sandbox_env.vars, &project_dir)?;
         let duration = start.elapsed();
 
         if exit_code == 0 {
@@ -174,8 +182,7 @@ pub fn run_install(
             exit_code,
             duration.as_millis() as u64,
             if exit_code == 0 { "clean" } else { "failed" },
-            Some((std::env::vars().count() - sandbox_env.len() + 1) as usize),
-            None,
+            Some(sandbox_env.withheld_count),
         );
     }
 
@@ -184,7 +191,7 @@ pub fn run_install(
         println!(
             "{} {}",
             "⊡".bold(),
-            "Network blocking is advisory in this version; OS-level enforcement coming in v0.2."
+            "Network policy is advisory in this version; OS-level enforcement coming in v0.2."
                 .dimmed()
         );
     }
@@ -213,7 +220,7 @@ fn print_header(manager: &str, allow_network: bool) {
     let mode = if allow_network {
         "network: full".yellow()
     } else {
-        "network: restricted".green()
+        "network: advisory".yellow()
     };
     println!("{} {} {}", "║".green(), "manager:".dimmed(), manager);
     println!("{} {}", "║".green(), mode);
@@ -222,22 +229,22 @@ fn print_header(manager: &str, allow_network: bool) {
 
 fn print_sandbox_wall() {
     println!();
-    println!("{} Sandbox defense:", "---".bold());
+    println!("{} Isolation layer:", "---".bold());
     println!("  ✓ HOME → temp directory (shell path resolution redirected)");
-    println!("  ✓ ~/.npmrc fully blocked (not present in sandbox HOME)");
+    println!("  ✓ ~/.npmrc hidden from HOME-based lookups");
     println!("  ✓ ~/.ssh hidden via HOME redirect");
     println!("  ✓ ~/.aws hidden via HOME redirect");
     println!("  ✓ ~/.config/gh hidden via HOME redirect");
     println!("  ✓ ~/.docker hidden via HOME redirect");
     println!("  ✓ ~/.kube hidden via HOME redirect");
     println!("  ✓ SSH agent disconnected");
-    println!("  ✓ Secret env vars stripped");
-    println!("  ⚠ Absolute-path bypass possible for non-.npmrc paths (OS enforcement in v0.2)");
+    println!("  ✓ Most environment variables withheld by default");
+    println!("  ⚠ Absolute-path bypass possible for all home files (OS enforcement in v0.2)");
 }
 
 fn print_sandbox_wall_union() {
     println!();
-    println!("{} Sandbox defense:", "---".bold());
+    println!("{} Isolation layer:", "---".bold());
     println!("  ✓ HOME → temp directory (shell path resolution redirected)");
     println!("  ✓ ~/.ssh hidden via HOME redirect");
     println!("  ✓ ~/.aws hidden via HOME redirect");
@@ -245,7 +252,7 @@ fn print_sandbox_wall_union() {
     println!("  ✓ ~/.docker hidden via HOME redirect");
     println!("  ✓ ~/.kube hidden via HOME redirect");
     println!("  ✓ SSH agent disconnected");
-    println!("  ✓ Secret env vars stripped");
+    println!("  ✓ Most environment variables withheld by default");
     println!("  ⚠ .npmrc pass-through enabled (needed for private registries)");
     println!("  ⚠ Postinstall scripts may read .npmrc (all other secrets hidden)");
     println!("  ⚠ Absolute-path bypass possible (OS enforcement in v0.2)");
@@ -293,8 +300,10 @@ fn find_package_manager(manager: &str) -> Result<PathBuf, Box<dyn std::error::Er
 fn create_sandbox_home() -> io::Result<PathBuf> {
     clean_old_sandboxes();
 
-    #[allow(deprecated)]
-    let sandbox = tempfile::tempdir()?.into_path();
+    let sandbox = tempfile::Builder::new()
+        .prefix("devguard-")
+        .tempdir()?
+        .keep();
 
     for (subdir, _label) in crate::paths::sandbox_home_paths() {
         let target = sandbox.join(&subdir);
@@ -311,26 +320,27 @@ fn clean_old_sandboxes() {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str.starts_with(".tmp") {
-                if let Ok(meta) = entry.metadata() {
-                    if let Ok(age) = now.duration_since(meta.modified().unwrap_or(now)) {
-                        if age.as_secs() > 3600 {
-                            let _ = fs::remove_dir_all(entry.path());
-                        }
-                    }
-                }
+            if name_str.starts_with("devguard-")
+                && let Ok(meta) = entry.metadata()
+                && let Ok(age) = now.duration_since(meta.modified().unwrap_or(now))
+                && age.as_secs() > 3600
+            {
+                let _ = fs::remove_dir_all(entry.path());
             }
         }
     }
 }
 
-fn create_union_home(real_home: &PathBuf) -> io::Result<PathBuf> {
+fn create_union_home(real_home: &Path) -> io::Result<PathBuf> {
     let sandbox = create_sandbox_home()?;
 
     for filename in crate::paths::auth_pass_through_paths() {
         let src = real_home.join(filename);
         if src.exists() {
             let dst = sandbox.join(filename);
+            if let Some(parent) = dst.parent() {
+                fs::create_dir_all(parent)?;
+            }
             fs::copy(&src, &dst).ok();
         }
     }
@@ -338,8 +348,10 @@ fn create_union_home(real_home: &PathBuf) -> io::Result<PathBuf> {
     Ok(sandbox)
 }
 
-fn build_sandbox_env(sandbox_home: &PathBuf) -> HashMap<String, String> {
+fn build_sandbox_env(sandbox_home: &Path) -> SandboxEnv {
+    let original_count = std::env::vars().count();
     let mut env = env::sanitize_for_sandbox();
+    let withheld_count = original_count.saturating_sub(env.len());
 
     let home_str = sandbox_home.display().to_string();
     env.insert("HOME".to_string(), home_str.clone());
@@ -390,15 +402,18 @@ fn build_sandbox_env(sandbox_home: &PathBuf) -> HashMap<String, String> {
         env.remove(&key);
     }
 
-    env
+    SandboxEnv {
+        vars: env,
+        withheld_count,
+    }
 }
 
 fn spawn_command(
-    pm_path: &PathBuf,
+    pm_path: &Path,
     cmds: &[&str],
     args: &[String],
     env: &HashMap<String, String>,
-    project_dir: &PathBuf,
+    project_dir: &Path,
 ) -> io::Result<i32> {
     let mut cmd = Command::new(pm_path);
 
@@ -425,10 +440,10 @@ fn spawn_command(
 }
 
 fn spawn_download_phase(
-    pm_path: &PathBuf,
+    pm_path: &Path,
     manager: &str,
     args: &[String],
-    project_dir: &PathBuf,
+    project_dir: &Path,
 ) -> io::Result<i32> {
     let mut cmd = Command::new(pm_path);
 
@@ -457,11 +472,11 @@ fn spawn_download_phase(
 }
 
 fn spawn_install_phase(
-    pm_path: &PathBuf,
+    pm_path: &Path,
     manager: &str,
     args: &[String],
     env: &HashMap<String, String>,
-    project_dir: &PathBuf,
+    project_dir: &Path,
 ) -> io::Result<i32> {
     let install_cmd = match manager {
         "bun" => vec!["add"],
@@ -472,10 +487,10 @@ fn spawn_install_phase(
 }
 
 fn spawn_rebuild_phase(
-    pm_path: &PathBuf,
+    pm_path: &Path,
     manager: &str,
     env: &HashMap<String, String>,
-    project_dir: &PathBuf,
+    project_dir: &Path,
 ) -> io::Result<i32> {
     let empty_args: Vec<String> = vec![];
     match manager {
@@ -487,12 +502,11 @@ fn spawn_rebuild_phase(
 
 fn log_audit(
     manager: &str,
-    project_dir: &PathBuf,
+    project_dir: &Path,
     exit_code: i32,
     duration_ms: u64,
     verdict: &str,
-    secrets_denied: Option<usize>,
-    _blocked: Option<usize>,
+    env_vars_withheld: Option<usize>,
 ) {
     let entry = AuditEntry {
         timestamp: chrono::Utc::now().to_rfc3339(),
@@ -503,8 +517,12 @@ fn log_audit(
         scripts_run: None,
         network_requests: None,
         blocked_requests: None,
-        secrets_denied,
-        exit_code: if exit_code == 0 { None } else { Some(exit_code) },
+        env_vars_withheld,
+        exit_code: if exit_code == 0 {
+            None
+        } else {
+            Some(exit_code)
+        },
         duration_ms,
         verdict: verdict.to_string(),
     };

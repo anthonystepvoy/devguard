@@ -1,9 +1,9 @@
-mod scanner;
-mod sandbox;
-mod env;
-mod paths;
-mod network;
 mod audit;
+mod env;
+mod network;
+mod paths;
+mod sandbox;
+mod scanner;
 
 use clap::{Parser, Subcommand};
 use colored::*;

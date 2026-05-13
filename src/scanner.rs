@@ -3,7 +3,7 @@ use colored::*;
 use regex::Regex;
 use serde::Serialize;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize)]
 pub struct ScanResult {
@@ -32,7 +32,7 @@ pub struct TokenMatch {
 
 pub fn run_scan(json: bool, dir: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let scan_dir = match dir {
-        Some(d) => PathBuf::from(d),
+        Some(d) => PathBuf::from(d).canonicalize()?,
         None => home::home_dir().ok_or("Cannot determine home directory")?,
     };
 
@@ -65,8 +65,8 @@ pub fn run_scan(json: bool, dir: Option<String>) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-fn scan_known_paths(scan_dir: &PathBuf, result: &mut ScanResult) {
-    for secret in paths::known_secret_paths() {
+fn scan_known_paths(scan_dir: &Path, result: &mut ScanResult) {
+    for secret in paths::known_secret_paths_in(scan_dir) {
         let rel = secret.path.strip_prefix(scan_dir).unwrap_or(&secret.path);
         let exists = secret.path.exists();
         let size = if exists {
@@ -80,7 +80,6 @@ fn scan_known_paths(scan_dir: &PathBuf, result: &mut ScanResult) {
                 Severity::Critical => 10,
                 Severity::High => 5,
                 Severity::Medium => 2,
-                Severity::Low => 1,
             };
         }
 
@@ -95,7 +94,7 @@ fn scan_known_paths(scan_dir: &PathBuf, result: &mut ScanResult) {
     }
 }
 
-fn scan_env_files(scan_dir: &PathBuf, result: &mut ScanResult) {
+fn scan_env_files(scan_dir: &Path, result: &mut ScanResult) {
     let env_files = [
         ".env",
         ".env.local",
@@ -106,40 +105,53 @@ fn scan_env_files(scan_dir: &PathBuf, result: &mut ScanResult) {
 
     for file in &env_files {
         let path = scan_dir.join(file);
-        if path.exists() {
-            if let Ok(contents) = fs::read_to_string(&path) {
-                scan_content_for_tokens(&path, &contents, result);
-            }
+        if path.exists()
+            && let Ok(contents) = fs::read_to_string(&path)
+        {
+            scan_content_for_tokens(&path, &contents, result);
         }
     }
 }
 
-fn scan_shell_profiles(scan_dir: &PathBuf, result: &mut ScanResult) {
+fn scan_shell_profiles(scan_dir: &Path, result: &mut ScanResult) {
     let profiles = [
-        ".bashrc", ".bash_profile", ".bash_aliases",
-        ".zshrc", ".zprofile", ".zshenv",
+        ".bashrc",
+        ".bash_profile",
+        ".bash_aliases",
+        ".zshrc",
+        ".zprofile",
+        ".zshenv",
         "profile.ps1",
         "config.fish",
     ];
 
     for profile in &profiles {
         let path = scan_dir.join(profile);
-        if path.exists() {
-            if let Ok(contents) = fs::read_to_string(&path) {
-                scan_content_for_tokens(&path, &contents, result);
-            }
+        if path.exists()
+            && let Ok(contents) = fs::read_to_string(&path)
+        {
+            scan_content_for_tokens(&path, &contents, result);
         }
     }
 }
 
-fn scan_content_for_tokens(path: &PathBuf, contents: &str, result: &mut ScanResult) {
+fn scan_content_for_tokens(path: &Path, contents: &str, result: &mut ScanResult) {
     let patterns: &[(&str, &str)] = &[
         (r#"(?i)TOKEN\s*=\s*['"][^'"]{8,}['"]"#, "TOKEN in quotes"),
         (r#"(?i)SECRET\s*=\s*['"][^'"]{8,}['"]"#, "SECRET in quotes"),
-        (r#"(?i)PASSWORD\s*=\s*['"][^'"]{8,}['"]"#, "PASSWORD in quotes"),
-        (r#"(?i)API_KEY\s*=\s*['"][^'"]{8,}['"]"#, "API_KEY in quotes"),
+        (
+            r#"(?i)PASSWORD\s*=\s*['"][^'"]{8,}['"]"#,
+            "PASSWORD in quotes",
+        ),
+        (
+            r#"(?i)API_KEY\s*=\s*['"][^'"]{8,}['"]"#,
+            "API_KEY in quotes",
+        ),
         (r#"_authToken\s*=\s*\S{8,}"#, "npm _authToken"),
-        (r"//registry\.npmjs\.org/:_authToken\s*=\s*(\S+)", "npm registry token"),
+        (
+            r"//registry\.npmjs\.org/:_authToken\s*=\s*(\S+)",
+            "npm registry token",
+        ),
         (r"ghp_[a-zA-Z0-9]{36}", "GitHub personal access token"),
         (r"github_pat_[a-zA-Z0-9_]{22,}", "GitHub fine-grained token"),
         (r"gho_[a-zA-Z0-9]{36}", "GitHub OAuth token"),
@@ -148,7 +160,8 @@ fn scan_content_for_tokens(path: &PathBuf, contents: &str, result: &mut ScanResu
         (r"ghr_[a-zA-Z0-9]{36}", "GitHub refresh token"),
         (r"AKIA[0-9A-Z]{16}", "AWS Access Key ID"),
         (r"sk-ant-[a-zA-Z0-9]{20,}", "Anthropic API key"),
-        (r"sk-(?!ant-)[a-zA-Z0-9]{20,}", "OpenAI API key"),
+        (r"sk-proj-[a-zA-Z0-9_-]{20,}", "OpenAI project API key"),
+        (r"sk-[a-zA-Z0-9]{32,}", "OpenAI API key"),
         (r"AIza[0-9A-Za-z\-_]{35}", "Google API key"),
     ];
 
@@ -160,11 +173,8 @@ fn scan_content_for_tokens(path: &PathBuf, contents: &str, result: &mut ScanResu
     for (re, token_type) in &compiled {
         for (line_number, line) in contents.lines().enumerate() {
             if re.is_match(line) {
-                let snippet = if line.len() > 120 {
-                    format!("{}...", &line[..117])
-                } else {
-                    line.to_string()
-                };
+                let redacted = re.replace_all(line, "[REDACTED]");
+                let snippet = truncate_snippet(&redacted);
 
                 result.readable_tokens.push(TokenMatch {
                     file: path.display().to_string(),
@@ -177,10 +187,70 @@ fn scan_content_for_tokens(path: &PathBuf, contents: &str, result: &mut ScanResu
     }
 }
 
+fn truncate_snippet(line: &str) -> String {
+    const MAX_CHARS: usize = 120;
+    if line.chars().count() <= MAX_CHARS {
+        return line.to_string();
+    }
+
+    let mut snippet: String = line.chars().take(MAX_CHARS - 3).collect();
+    snippet.push_str("...");
+    snippet
+}
+
 fn calculate_risk(result: &mut ScanResult) {
     result.risk_score += (result.readable_tokens.len() as u32) * 3;
     if result.risk_score > 100 {
         result.risk_score = 100;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scan_known_paths_uses_requested_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join(".npmrc"), "token").expect("write .npmrc");
+
+        let mut result = ScanResult {
+            exposed_secrets: Vec::new(),
+            readable_tokens: Vec::new(),
+            risk_score: 0,
+        };
+
+        scan_known_paths(dir.path(), &mut result);
+
+        let npmrc = result
+            .exposed_secrets
+            .iter()
+            .find(|finding| finding.name == ".npmrc")
+            .expect(".npmrc finding");
+        assert!(npmrc.exists);
+        assert_eq!(npmrc.path, ".npmrc");
+        assert_eq!(result.risk_score, 10);
+    }
+
+    #[test]
+    fn token_matches_are_redacted() {
+        let mut result = ScanResult {
+            exposed_secrets: Vec::new(),
+            readable_tokens: Vec::new(),
+            risk_score: 0,
+        };
+
+        scan_content_for_tokens(
+            Path::new(".env"),
+            "OPENAI_API_KEY=\"sk-abcdefghijklmnopqrstuvwxyz123456\"",
+            &mut result,
+        );
+
+        assert!(!result.readable_tokens.is_empty());
+        for token in &result.readable_tokens {
+            assert!(token.line_snippet.contains("[REDACTED]"));
+            assert!(!token.line_snippet.contains("abcdefghijklmnopqrstuvwxyz"));
+        }
     }
 }
 

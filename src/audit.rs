@@ -13,7 +13,8 @@ pub struct AuditEntry {
     pub scripts_run: Option<usize>,
     pub network_requests: Option<usize>,
     pub blocked_requests: Option<usize>,
-    pub secrets_denied: Option<usize>,
+    #[serde(default, alias = "secrets_denied")]
+    pub env_vars_withheld: Option<usize>,
     pub exit_code: Option<i32>,
     pub duration_ms: u64,
     pub verdict: String,
@@ -54,18 +55,21 @@ pub fn show_recent(lines: usize) -> Result<(), Box<dyn std::error::Error>> {
     for line in &entries[start..] {
         if let Ok(entry) = serde_json::from_str::<AuditEntry>(line) {
             println!(
-                "{}\n  action:     {}\n  manager:    {}\n  project:    {}\n  duration:   {}ms\n  verdict:    {}\n  secrets:    denied {}\n  network:    {} reqs / {} blocked\n  scripts:    {}\n  exit:       {}\n",
-                "─".repeat(50),
+                "{}\n  action:     {}\n  manager:    {}\n  project:    {}\n  duration:   {}ms\n  verdict:    {}\n  env:        withheld {}\n  network:    {} reqs / {} blocked\n  scripts:    {}\n  exit:       {}\n",
+                "-".repeat(50),
                 entry.action,
                 entry.package_manager,
                 entry.project_dir,
                 entry.duration_ms,
                 entry.verdict,
-                entry.secrets_denied.unwrap_or(0),
+                entry.env_vars_withheld.unwrap_or(0),
                 entry.network_requests.unwrap_or(0),
                 entry.blocked_requests.unwrap_or(0),
                 entry.scripts_run.unwrap_or(0),
-                entry.exit_code.map(|e| e.to_string()).unwrap_or_else(|| "N/A".to_string()),
+                entry
+                    .exit_code
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "N/A".to_string()),
             );
         }
     }
