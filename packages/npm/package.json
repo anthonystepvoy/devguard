@@ -16,7 +16,7 @@
     "test": "node --test install.test.js"
   },
   "files": [
-    "bin/",
+    "bin/devguard.js",
     "install.js",
     "README.md"
   ],
