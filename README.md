@@ -58,6 +58,8 @@ devguard install npm -- -D typescript
 
 devguard audit-log
 devguard audit-log --lines 50
+
+devguard doctor
 ```
 
 ## What Is Protected Today
@@ -116,6 +118,8 @@ The binary is `target/release/devguard` or `target/release/devguard.exe`.
 - [x] Conservative environment allowlist
 - [x] JSONL audit log
 - [x] npm distribution wrapper with checksum verification
+- [x] `devguard doctor` diagnostics
+- [x] CI malicious lifecycle-script fixture
 - [ ] OS-level filesystem isolation
 - [ ] OS-level network blocking
 - [ ] Per-project policies

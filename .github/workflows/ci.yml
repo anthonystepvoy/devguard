@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    name: Test ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Test Rust
+        run: cargo test --locked
+
+      - name: Lint Rust
+        run: cargo clippy --locked -- -D warnings
+
+      - name: Test npm wrapper
+        run: npm test --prefix packages/npm
+
+      - name: Build CLI
+        run: cargo build --locked
+
+      - name: Malicious lifecycle fixture
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'dg-malicious'
+          $victim = Join-Path $root 'victim'
+          $pkg = Join-Path $root 'pkg'
+          New-Item -ItemType Directory -Force -Path $victim | Out-Null
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+
+          @'
+          {
+            "name": "dg-malicious",
+            "version": "1.0.0",
+            "scripts": {
+              "postinstall": "node postinstall.js"
+            }
+          }
+          '@ | Set-Content -Path (Join-Path $pkg 'package.json')
+
+          @'
+          const fs = require("fs");
+          const path = require("path");
+
+          const keys = [
+            "OPENAI_API_KEY",
+            "GITHUB_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+            "NPM_TOKEN"
+          ];
+
+          fs.writeFileSync(
+            path.join(process.cwd(), "report.json"),
+            JSON.stringify({
+              HOME: process.env.HOME,
+              USERPROFILE: process.env.USERPROFILE,
+              seenEnv: Object.fromEntries(keys.map(k => [k, process.env[k] || null])),
+              homeNpmrcExists: fs.existsSync(path.join(process.env.HOME || "", ".npmrc")),
+              homeSshExists: fs.existsSync(path.join(process.env.HOME || "", ".ssh"))
+            }, null, 2)
+          );
+          '@ | Set-Content -Path (Join-Path $pkg 'postinstall.js')
+
+          @"
+          {
+            "name": "dg-victim",
+            "version": "1.0.0",
+            "private": true,
+            "dependencies": {
+              "dg-malicious": "file:$($pkg.Replace('\', '/'))"
+            }
+          }
+          "@ | Set-Content -Path (Join-Path $victim 'package.json')
+
+          $env:OPENAI_API_KEY = 'fake-openai'
+          $env:GITHUB_TOKEN = 'fake-github'
+          $env:AWS_SECRET_ACCESS_KEY = 'fake-aws'
+          $env:NPM_TOKEN = 'fake-npm'
+
+          $bin = if ($IsWindows) {
+            Join-Path (Get-Location) 'target\debug\devguard.exe'
+          } else {
+            Join-Path (Get-Location) 'target/debug/devguard'
+          }
+
+          & $bin install npm --cwd $victim
+          if ($LASTEXITCODE -ne 0) {
+            throw "devguard install failed with exit code $LASTEXITCODE"
+          }
+
+          $reportPath = Join-Path $victim 'node_modules/dg-malicious/report.json'
+          $report = Get-Content -Raw -Path $reportPath | ConvertFrom-Json
+
+          foreach ($key in @('OPENAI_API_KEY', 'GITHUB_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'NPM_TOKEN')) {
+            if ($null -ne $report.seenEnv.$key) {
+              throw "$key leaked into lifecycle script"
+            }
+          }
+          if ($report.homeNpmrcExists) {
+            throw ".npmrc was visible through sandbox HOME"
+          }
+          if ($report.homeSshExists) {
+            throw ".ssh was visible through sandbox HOME"
+          }
+          if ($report.HOME -notmatch 'devguard-') {
+            throw "HOME was not redirected to a devguard temp directory"
+          }

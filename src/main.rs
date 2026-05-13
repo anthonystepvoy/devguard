@@ -1,4 +1,6 @@
 mod audit;
+mod console;
+mod doctor;
 mod env;
 mod network;
 mod paths;
@@ -12,6 +14,8 @@ use std::process;
 #[derive(Parser)]
 #[command(name = "devguard", about = "Developer token firewall", version)]
 struct Cli {
+    #[arg(long, global = true, help = "Disable colored output")]
+    no_color: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -46,10 +50,16 @@ enum Command {
         #[arg(short, long, default_value = "20", help = "Number of entries")]
         lines: usize,
     },
+    #[command(about = "Check local devguard setup and release readiness")]
+    Doctor {
+        #[arg(short, long, help = "Output as JSON")]
+        json: bool,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
+    console::init(cli.no_color);
 
     let result = match cli.command {
         Command::Scan { json, dir } => scanner::run_scan(json, dir),
@@ -60,6 +70,7 @@ fn main() {
             cwd,
         } => sandbox::run_install(&manager, &args, allow_network, cwd.as_deref()),
         Command::AuditLog { lines } => audit::show_recent(lines),
+        Command::Doctor { json } => doctor::run_doctor(json),
     };
 
     if let Err(e) = result {

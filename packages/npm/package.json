@@ -1,6 +1,6 @@
 {
   "name": "@anthonystepvoy/devguard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Experimental HOME/env isolation for package-manager install scripts",
   "license": "MIT",
   "repository": {
